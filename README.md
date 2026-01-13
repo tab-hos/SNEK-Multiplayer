@@ -1,2 +1,0 @@
-# snake2
-snek

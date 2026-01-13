@@ -1,0 +1,59 @@
+{
+    "name": "GameRoom",
+    "type": "object",
+    "properties": {
+      "room_code": {
+        "type": "string",
+        "description": "Unique room code for joining"
+      },
+      "host_id": {
+        "type": "string",
+        "description": "ID of the host player"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "waiting",
+          "playing",
+          "paused",
+          "ended"
+        ],
+        "default": "waiting"
+      },
+      "players": {
+        "type": "array",
+        "description": "Array of player objects with id, name, color, snake, score, alive",
+        "items": {
+          "type": "object"
+        }
+      },
+      "food": {
+        "type": "object",
+        "description": "Current food position {x, y}"
+      },
+      "grid_size": {
+        "type": "number",
+        "default": 30
+      },
+      "timer": {
+        "type": "number",
+        "description": "Game timer in seconds"
+      },
+      "last_update": {
+        "type": "number",
+        "description": "Timestamp of last game update"
+      },
+      "message": {
+        "type": "string",
+        "description": "Broadcast message to all players"
+      },
+      "winner": {
+        "type": "string",
+        "description": "Winner player name"
+      }
+    },
+    "required": [
+      "room_code",
+      "host_id"
+    ]
+  }

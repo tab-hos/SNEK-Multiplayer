@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@/components/*": ["./Components/*"],
+      "@/pages/*": ["./Pages/*"],
+      "@/utils": ["./src/utils.js"],
+      "@/api/*": ["./src/api/*"]
+    },
+    "jsx": "react-jsx",
+    "moduleResolution": "node",
+    "resolveJsonModule": true
+  },
+  "include": [
+    "src/**/*",
+    "Pages/**/*",
+    "Components/**/*"
+  ],
+  "exclude": ["node_modules"]
+}
+
