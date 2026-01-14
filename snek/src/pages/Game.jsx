@@ -14,14 +14,17 @@ import { soundManager } from '../components/game/SoundManager.js';
 // Production (e.g., Render) may have higher latency, so we adjust accordingly
 const isProduction = import.meta.env.PROD;
 const TICK_RATE = isProduction ? 250 : 200; // Slightly slower in production to account for latency
+const SPEED_TICK_MULTIPLIER = 0.6; // Faster global tick while any speed powerup is active
 
 export default function Game() {
   const [room, setRoom] = useState(null);
+  // `displayRoom` is used only for rendering the board smoothly (can be interpolated).
+  // `room` remains the authoritative server state for UI/logic.
+  const [displayRoom, setDisplayRoom] = useState(null);
   const [playerId] = useState(() => `player_${Math.random().toString(36).substr(2, 9)}`);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [rematchTimer, setRematchTimer] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(20); // Percentage (15-25%)
   const [fps, setFps] = useState(0);
@@ -36,6 +39,13 @@ export default function Game() {
   const countdownIntervalRef = useRef(null);
   const isStartingGameRef = useRef(false);
   const isInWaitingLobbyRef = useRef(false);
+  const displayRoomRef = useRef(null);
+  const interpolationTimeoutRef = useRef(null);
+  const interpolationIdRef = useRef(0);
+
+  useEffect(() => {
+    displayRoomRef.current = displayRoom;
+  }, [displayRoom]);
 
   // API calls
   const callServer = useCallback(async (action, params = {}) => {
@@ -56,6 +66,7 @@ export default function Game() {
       const result = await callServer('createRoom', { playerName });
       if (result.success) {
         setRoom(result.room);
+        setDisplayRoom(result.room);
       } else {
         setError(result.error || 'Failed to create room');
       }
@@ -74,6 +85,7 @@ export default function Game() {
       const result = await callServer('joinRoom', { playerName, roomCode });
       if (result.success) {
         setRoom(result.room);
+        setDisplayRoom(result.room);
       } else {
         setError(result.error || 'Failed to join room');
       }
@@ -107,6 +119,7 @@ export default function Game() {
         // Set room to playing status immediately so game board shows
         const updatedRoom = { ...result.room, status: 'playing' };
         setRoom(updatedRoom);
+        setDisplayRoom(updatedRoom);
         
         // Start countdown on game board
         setCountdown(5);
@@ -137,14 +150,33 @@ export default function Game() {
     }
   }, [room, callServer]);
 
+  // Helper: is speed active for any player (speed affects global tick rate; no more 2-cells-per-tick).
+  const isSpeedActive = useCallback(() => {
+    if (!room?.players) return false;
+    const now = Date.now();
+    return room.players.some(p =>
+      Array.isArray(p.powerups) &&
+      p.powerups.some(pow => pow?.type === 'speed' && (now - pow.startTime) < pow.duration)
+    );
+  }, [room?.players]);
+
+  const getEffectiveTickRate = useCallback(() => {
+    if (!isSpeedActive()) return TICK_RATE;
+    return Math.max(80, Math.floor(TICK_RATE * SPEED_TICK_MULTIPLIER));
+  }, [isSpeedActive]);
+
   // Game tick
   const gameTick = useCallback(async () => {
     if (!room || room.status !== 'playing') return;
     // Don't start game ticks while countdown is active
     if (countdown !== null && countdown > 0) return;
+
+    // Only the host should drive the tick loop to avoid multiple clients speeding/jittering the game.
+    if (room.host_id && room.host_id !== playerId) return;
     
     const now = Date.now();
-    if (now - lastTickRef.current < TICK_RATE) return;
+    const effectiveTickRate = getEffectiveTickRate();
+    if (now - lastTickRef.current < effectiveTickRate) return;
     lastTickRef.current = now;
 
     // Send queued direction first (non-blocking)
@@ -165,7 +197,7 @@ export default function Game() {
       // Silently handle tick failures - game updates come via WebSocket broadcasts anyway
       // This is expected behavior, especially on slower networks like Render
     });
-  }, [room, callServer]);
+  }, [room, callServer, countdown, playerId, getEffectiveTickRate]);
 
   // Poll for updates (lobby & paused) - also listen to WebSocket updates
   const pollRoom = useCallback(async () => {
@@ -197,6 +229,84 @@ export default function Game() {
   // Listen to WebSocket updates
   useEffect(() => {
     if (!room) return;
+
+    const setRoomWithInterpolation = (nextRoom) => {
+      // Always update authoritative room immediately
+      setRoom(nextRoom);
+
+      // Clear any pending interpolation
+      if (interpolationTimeoutRef.current) {
+        clearTimeout(interpolationTimeoutRef.current);
+        interpolationTimeoutRef.current = null;
+      }
+
+      // Only interpolate during active gameplay
+      if (!nextRoom || nextRoom.status !== 'playing') {
+        setDisplayRoom(nextRoom);
+        return;
+      }
+
+      const prev = displayRoomRef.current || nextRoom;
+      const grid = nextRoom.grid_size || 40;
+
+      let shouldInterpolate = false;
+      const nextPlayers = nextRoom.players || [];
+      const prevPlayersById = new Map((prev?.players || []).map(p => [p.id, p]));
+
+      const intermediatePlayers = nextPlayers.map((p) => {
+        const prevP = prevPlayersById.get(p.id);
+        if (!prevP?.snake?.[0] || !p?.snake?.[0]) return p;
+        if (!p.alive) return p;
+
+        const prevHead = prevP.snake[0];
+        const nextHead = p.snake[0];
+
+        // Compute modular deltas
+        const dxF = (nextHead.x - prevHead.x + grid) % grid;
+        const dxB = (prevHead.x - nextHead.x + grid) % grid;
+        const dyF = (nextHead.y - prevHead.y + grid) % grid;
+        const dyB = (prevHead.y - nextHead.y + grid) % grid;
+        const dx = Math.min(dxF, dxB);
+        const dy = Math.min(dyF, dyB);
+
+        // If we jumped exactly 2 cells in a straight line, insert an intermediate 1-cell step
+        const isTwoStep = (dx === 2 && dy === 0) || (dx === 0 && dy === 2);
+        if (!isTwoStep) return p;
+
+        shouldInterpolate = true;
+        const stepX = dx === 2 ? (dxF === 2 ? 1 : -1) : 0;
+        const stepY = dy === 2 ? (dyF === 2 ? 1 : -1) : 0;
+
+        const intermediateHead = {
+          x: (prevHead.x + stepX + grid) % grid,
+          y: (prevHead.y + stepY + grid) % grid,
+        };
+
+        const prevSnake = Array.isArray(prevP.snake) ? prevP.snake : [];
+        const intermediateSnake =
+          prevSnake.length > 0
+            ? [intermediateHead, ...prevSnake.slice(0, -1)]
+            : [intermediateHead];
+
+        return { ...p, snake: intermediateSnake };
+      });
+
+      if (!shouldInterpolate) {
+        setDisplayRoom(nextRoom);
+        return;
+      }
+
+      const id = ++interpolationIdRef.current;
+      const intermediateRoom = { ...nextRoom, players: intermediatePlayers };
+      setDisplayRoom(intermediateRoom);
+
+      // After half a tick, show the final state
+      const delay = Math.max(40, Math.floor(getEffectiveTickRate() / 2));
+      interpolationTimeoutRef.current = setTimeout(() => {
+        if (interpolationIdRef.current !== id) return;
+        setDisplayRoom(nextRoom);
+      }, delay);
+    };
     
     const handleRoomUpdate = (updatedRoom) => {
       if (updatedRoom) {
@@ -218,7 +328,7 @@ export default function Game() {
           return;
         }
         
-        setRoom(updatedRoom);
+        setRoomWithInterpolation(updatedRoom);
         if (updatedRoom.status === 'playing' && room?.status !== 'playing') {
           // Game just started - sound will play when countdown ends
         }
@@ -234,14 +344,12 @@ export default function Game() {
         }
         
         // Always update room state from server (server is source of truth)
-        setRoom(update.room);
+        setRoomWithInterpolation(update.room);
         if (update.foodEaten) soundManager.playEat();
         if (update.powerUpCollected) soundManager.playPowerUp();
         if (update.eliminated?.length > 0) soundManager.playDeath();
         if (update.room.status === 'ended') {
           soundManager.playWin();
-          // Start rematch timer (15 seconds)
-          setRematchTimer(15);
         }
       }
     };
@@ -252,7 +360,7 @@ export default function Game() {
         isInWaitingLobbyRef.current = false;
         
         // Set room to playing immediately so gameboard shows
-        setRoom({ ...updatedRoom, status: 'playing' });
+        setRoomWithInterpolation({ ...updatedRoom, status: 'playing' });
         
         // Start countdown for all players (including host if they don't have it yet)
         // This ensures both host and guests see the countdown
@@ -283,14 +391,14 @@ export default function Game() {
     const handleChatMessage = (updatedRoom) => {
       // Update room state with latest chat messages
       if (updatedRoom) {
-        setRoom(updatedRoom);
+        setRoomWithInterpolation(updatedRoom);
       }
     };
     
     const handleTypingUpdate = (updatedRoom) => {
       // Update room state with typing status
       if (updatedRoom) {
-        setRoom(updatedRoom);
+        setRoomWithInterpolation(updatedRoom);
       }
     };
     
@@ -334,58 +442,6 @@ export default function Game() {
       document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
     };
   }, []);
-
-  // Rematch timer countdown
-  const roomCodeRef = useRef(room?.room_code);
-  useEffect(() => {
-    roomCodeRef.current = room?.room_code;
-  }, [room?.room_code]);
-
-  useEffect(() => {
-    if (rematchTimer === null || rematchTimer <= 0) return;
-    
-    const interval = setInterval(() => {
-      setRematchTimer(prev => {
-        if (prev === null || prev <= 1) {
-          // Timer reached 0, trigger rematch - go back to lobby
-          const currentRoomCode = roomCodeRef.current;
-          if (currentRoomCode) {
-            // Set flag to prevent WebSocket from redirecting back
-            isInWaitingLobbyRef.current = true;
-            
-            // Use resetToLobby to properly reset the room
-            callServer('resetToLobby', { roomCode: currentRoomCode })
-              .then(result => {
-                if (result.success && result.room) {
-                  setRoom(result.room);
-                } else {
-                  // Fallback to getRoom
-                  return callServer('getRoom', { roomCode: currentRoomCode });
-                }
-              })
-              .then(result => {
-                if (result && result.success && result.room) {
-                  const updatedRoom = { ...result.room, status: 'waiting' };
-                  setRoom(updatedRoom);
-                } else {
-                  setRoom(null);
-                  isInWaitingLobbyRef.current = false;
-                }
-              })
-              .catch(err => {
-                console.error('Failed to reset to lobby:', err);
-                setRoom(null);
-                isInWaitingLobbyRef.current = false;
-              });
-          }
-          return null;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [rematchTimer, callServer]);
 
   // Keyboard controls
   useEffect(() => {
@@ -513,7 +569,8 @@ export default function Game() {
       // Throttle ticks to prevent overwhelming the server
       // Use performance.now() for more accurate timing
       const now = performance.now();
-      if (now - lastTickTime >= TICK_RATE) {
+      const effectiveTickRate = getEffectiveTickRate();
+      if (now - lastTickTime >= effectiveTickRate) {
         // Don't await - let it run in background
         // WebSocket broadcasts are the primary update mechanism
         gameTick();
@@ -536,7 +593,7 @@ export default function Game() {
         gameLoopRef.current = null;
       }
     };
-  }, [room?.status, gameTick, countdown]);
+  }, [room?.status, gameTick, countdown, getEffectiveTickRate]);
 
   // Polling for lobby/paused (fallback if WebSocket fails)
   useEffect(() => {
@@ -570,8 +627,6 @@ export default function Game() {
   };
 
   const handleQuit = async () => {
-    // Clear rematch timer
-    setRematchTimer(null);
     if (room) {
       try {
         await callServer('leaveRoom', { roomCode: room.room_code });
@@ -580,6 +635,7 @@ export default function Game() {
       }
     }
     setRoom(null);
+    setDisplayRoom(null);
   };
 
   const handlePlayAgain = useCallback(async () => {
@@ -593,9 +649,6 @@ export default function Game() {
     setCountdown(null);
     isStartingGameRef.current = false;
     
-    // Reset rematch timer
-    setRematchTimer(null);
-    
     // Set flag to indicate we're intentionally in waiting lobby
     // This will prevent WebSocket updates from changing status
     isInWaitingLobbyRef.current = true;
@@ -606,14 +659,17 @@ export default function Game() {
       if (result.success && result.room) {
         // Server has reset the room, update local state
         setRoom(result.room);
+        setDisplayRoom(result.room);
       } else {
         // If reset fails, try to get room
         const getRoomResult = await callServer('getRoom', { roomCode: room.room_code });
         if (getRoomResult.success && getRoomResult.room) {
           const updatedRoom = { ...getRoomResult.room, status: 'waiting' };
           setRoom(updatedRoom);
+          setDisplayRoom(updatedRoom);
         } else {
           setRoom(null);
+          setDisplayRoom(null);
           isInWaitingLobbyRef.current = false;
         }
       }
@@ -625,12 +681,15 @@ export default function Game() {
         if (result.success && result.room) {
           const updatedRoom = { ...result.room, status: 'waiting' };
           setRoom(updatedRoom);
+          setDisplayRoom(updatedRoom);
         } else {
           setRoom(null);
+          setDisplayRoom(null);
           isInWaitingLobbyRef.current = false;
         }
       } catch {
         setRoom(null);
+        setDisplayRoom(null);
         isInWaitingLobbyRef.current = false;
       }
     }
@@ -882,14 +941,15 @@ export default function Game() {
                 }}
               >
                 <GameBoard
-                  players={room.players}
-                  food={room.food}
-                  powerups={room.powerups}
-                  gridSize={room.grid_size}
+                  players={(displayRoom || room).players}
+                  food={(displayRoom || room).food}
+                  powerups={(displayRoom || room).powerups}
+                  gridSize={(displayRoom || room).grid_size}
                   playerId={playerId}
                   viewportSize={null}
                   showStartPositions={countdown !== null && countdown > 0}
                   countdown={countdown}
+                  tickRateMs={getEffectiveTickRate()}
                 />
               </div>
             </div>
@@ -911,27 +971,31 @@ export default function Game() {
                 maxHeight: '94vh'
               }}
             >
-              <div className="flex-1 overflow-hidden flex flex-col min-h-0 p-4">
-                <div className="flex-shrink-0 space-y-4 mb-4">
-                  <Scoreboard players={room.players} timer={room.timer} />
-                  <GameMenu
-                    status={room.status}
-                    onPause={handlePause}
-                    onResume={handleResume}
-                    onQuit={handleQuit}
-                    onPlayAgain={handlePlayAgain}
-                    winner={room.winner}
-                    message={room.message}
-                    rematchTimer={rematchTimer}
-                  />
-                </div>
-                <div className="flex-1 min-h-0 border-t border-gray-700 pt-4 flex flex-col overflow-hidden">
-                  <Chat
-                    room={room}
-                    playerId={playerId}
-                    onSendMessage={handleSendMessage}
-                    disabled={room.status === 'paused' || room.status === 'ended'}
-                  />
+              <div className="flex-1 min-h-0 p-4 overflow-hidden">
+                <div
+                  className="h-full min-h-0 grid overflow-hidden"
+                  style={{ gridTemplateRows: 'minmax(0, 1fr) clamp(160px, 26vh, 240px)' }}
+                >
+                  <div className="min-h-0 overflow-hidden space-y-2 pb-2">
+                    <Scoreboard players={room.players} timer={room.timer} />
+                    <GameMenu
+                      status={room.status}
+                      onPause={handlePause}
+                      onResume={handleResume}
+                      onQuit={handleQuit}
+                      onPlayAgain={handlePlayAgain}
+                      winner={room.winner}
+                      message={room.message}
+                    />
+                  </div>
+                  <div className="min-h-0 border-t border-gray-700 pt-4 overflow-hidden">
+                    <Chat
+                      room={room}
+                      playerId={playerId}
+                      onSendMessage={handleSendMessage}
+                      disabled={room.status === 'paused' || room.status === 'ended'}
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -967,14 +1031,15 @@ export default function Game() {
                 }}
               >
                 <GameBoard
-                  players={room.players}
-                  food={room.food}
-                  powerups={room.powerups}
-                  gridSize={room.grid_size}
+                  players={(displayRoom || room).players}
+                  food={(displayRoom || room).food}
+                  powerups={(displayRoom || room).powerups}
+                  gridSize={(displayRoom || room).grid_size}
                   playerId={playerId}
                   viewportSize={null}
                   showStartPositions={countdown !== null && countdown > 0}
                   countdown={countdown}
+                  tickRateMs={getEffectiveTickRate()}
                 />
               </div>
             </div>
@@ -990,8 +1055,11 @@ export default function Game() {
                 boxSizing: 'border-box'
               }}
             >
-              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                <div className="flex-shrink-0 space-y-4 mb-4">
+              <div
+                className="flex-1 min-h-0 grid overflow-hidden"
+                style={{ gridTemplateRows: 'minmax(0, 1fr) clamp(160px, 26vh, 240px)' }}
+              >
+                <div className="min-h-0 overflow-hidden space-y-2 pb-2">
                   <Scoreboard players={room.players} timer={room.timer} />
                   <GameMenu
                     status={room.status}
@@ -1001,10 +1069,9 @@ export default function Game() {
                     onPlayAgain={handlePlayAgain}
                     winner={room.winner}
                     message={room.message}
-                    rematchTimer={rematchTimer}
                   />
                 </div>
-                <div className="flex-1 min-h-0 overflow-hidden border-t border-gray-700 pt-4">
+                <div className="min-h-0 overflow-hidden border-t border-gray-700 pt-4">
                   <Chat
                     room={room}
                     playerId={playerId}

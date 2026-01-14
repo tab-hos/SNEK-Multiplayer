@@ -11,21 +11,24 @@ export default function Scoreboard({ players, timer }) {
   };
 
   return (
-    <div className="bg-[#323645] rounded-xl p-4">
+    <div
+      className="bg-[#323645] rounded-xl"
+      style={{ padding: 'clamp(8px, 1.2vh, 16px)' }}
+    >
       {/* Timer */}
-      <div className="flex items-center justify-center gap-2 mb-4 pb-3">
-        <Clock className="w-5 h-5 text-white" />
-        <span className="text-2xl font-mono font-bold text-white">
+      <div className="flex items-center justify-center gap-2 mb-2 pb-2">
+        <Clock className="w-4 h-4 text-white" />
+        <span className="font-mono font-bold text-white" style={{ fontSize: 'clamp(16px, 2.4vh, 24px)' }}>
           {formatTime(timer || 0)}
         </span>
       </div>
       
       {/* Players */}
-      <div className="space-y-2">
+      <div className="space-y-1">
         {sortedPlayers.map((player, idx) => (
           <div
             key={player.id}
-            className={`flex items-center gap-3 p-2 rounded-lg transition-all ${
+            className={`flex items-center gap-2 p-2 rounded-lg transition-all ${
               !player.alive ? 'opacity-50' : ''
             }`}
             style={{ backgroundColor: `${player.color}15` }}

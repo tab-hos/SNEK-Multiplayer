@@ -687,8 +687,7 @@ function handleMessage(ws, playerId, rawMessage) {
             return { ...player, snake: player.snake };
           }
           
-          // Check if player has speed powerup
-          const hasSpeed = hasPowerup(player, 'speed');
+          // Speed powerup no longer moves 2 cells per tick; speed is handled by tick frequency on client/host.
           const hasMagnet = hasPowerup(player, 'magnet');
           
           // Move the snake - FIRST movement
@@ -717,33 +716,7 @@ function handleMessage(ws, playerId, rawMessage) {
             }
           }
           
-          // If player has speed powerup, move twice in one tick
-          if (hasSpeed) {
-            const newHead2 = {
-              x: (newHead1.x + direction.x + GRID_SIZE) % GRID_SIZE,
-              y: (newHead1.y + direction.y + GRID_SIZE) % GRID_SIZE
-            };
-            currentSnake = [newHead2, ...currentSnake.slice(0, -1)];
-            
-            // Check food collision after second movement (only if didn't eat in first movement)
-            if (!playerFoodEaten) {
-              for (let i = 0; i < food.length; i++) {
-                if (eatenFoodIndices.includes(i)) continue;
-                
-                const canEat = (newHead2.x === food[i].x && newHead2.y === food[i].y) || 
-                              (hasMagnet && checkMagnet(newHead2, food[i]));
-                
-                if (canEat) {
-                  eatenFoodIndices.push(i);
-                  foodEaten = true;
-                  playerFoodEaten = true;
-                  const tail = currentSnake[currentSnake.length - 1];
-                  currentSnake = [...currentSnake, tail];
-                  break; // Only eat one food per tick
-                }
-              }
-            }
-          }
+          // NOTE: no second movement step for speed powerup
           
           // Update player with new snake and score if food was eaten
           let updatedPlayer = {
@@ -784,8 +757,6 @@ function handleMessage(ws, playerId, rawMessage) {
         updatedPlayers = updatedPlayers.map((player, idx) => {
           if (!player.alive) return player;
           const head = player.snake[0];
-          const hasSpeed = hasPowerup(player, 'speed');
-          
           // Check collision at current head position
           for (let i = 0; i < powerups.length; i++) {
             if (collectedPowerups.includes(i)) continue;
@@ -800,30 +771,6 @@ function handleMessage(ws, playerId, rawMessage) {
               };
             }
           }
-          
-          // If player has speed powerup, also check the position one step back
-          // (the intermediate position where head was before second movement)
-          if (hasSpeed && player.snake.length > 0) {
-            const direction = player.direction;
-            const intermediateHead = {
-              x: (head.x - direction.x + GRID_SIZE) % GRID_SIZE,
-              y: (head.y - direction.y + GRID_SIZE) % GRID_SIZE
-            };
-            
-            for (let i = 0; i < powerups.length; i++) {
-              if (collectedPowerups.includes(i)) continue;
-              if (checkPowerupCollision(intermediateHead, powerups[i])) {
-                collectedPowerups.push(i);
-                powerUpCollected = true;
-                return {
-                  ...player,
-                  powerups: addPowerup(player, powerups[i].type),
-                  powerupsCollected: (player.powerupsCollected || 0) + 1
-                };
-              }
-            }
-          }
-          
           return player;
         });
         
