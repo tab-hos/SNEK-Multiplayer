@@ -126,17 +126,16 @@ export default function Chat({ room, playerId, onSendMessage, disabled = false }
   };
 
   return (
-    <div className="bg-[#323645] rounded-xl p-4 flex flex-col" style={{ height: '100%', minHeight: '400px' }}>
+    <div className="bg-[#323645] rounded-xl p-4 flex flex-col h-full min-h-0 overflow-hidden">
       {/* Chat Header */}
-      <div className="p-3 flex-shrink-0">
+      <div className="flex-shrink-0 pb-2">
         <h3 className="text-sm font-semibold text-white">Chat</h3>
       </div>
       
-      {/* Messages - fixed height with scroll */}
+      {/* Messages - flexible height with scroll */}
       <div 
         ref={messagesContainerRef}
         className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0"
-        style={{ maxHeight: '300px', minHeight: '200px' }}
       >
         {messages.length === 0 ? (
           <div className="text-center text-gray-500 text-sm py-4">

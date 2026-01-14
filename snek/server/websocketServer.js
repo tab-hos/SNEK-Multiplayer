@@ -282,13 +282,17 @@ function broadcastToRoom(roomCode, message, excludePlayerId = null) {
     console.log(`[Server] Room has ${room.clients.size} clients:`, Array.from(room.clients.keys()));
   }
   
+  // Stringify message once for all clients (performance optimization)
+  const messageString = JSON.stringify(message);
+  
   room.clients.forEach((client, pid) => {
     if (pid !== excludePlayerId) {
       if (client.readyState === 1) {
         if (process.env.DEBUG === 'true') {
           console.log(`[Server] Sending to player ${pid}`);
         }
-        client.send(JSON.stringify(message));
+        // Use pre-stringified message for better performance
+        client.send(messageString);
       } else {
         if (process.env.DEBUG === 'true') {
           console.log(`[Server] Client ${pid} not ready (state: ${client.readyState})`);
@@ -776,10 +780,13 @@ function handleMessage(ws, playerId, rawMessage) {
         let powerUpCollected = false;
         
         // Check powerup collection (powerups take up 4 grid spaces, so check 2x2 area)
+        // IMPORTANT: For speed powerup, check both head positions to avoid skipping powerups
         updatedPlayers = updatedPlayers.map((player, idx) => {
           if (!player.alive) return player;
           const head = player.snake[0];
+          const hasSpeed = hasPowerup(player, 'speed');
           
+          // Check collision at current head position
           for (let i = 0; i < powerups.length; i++) {
             if (collectedPowerups.includes(i)) continue;
             // Check if player's head is within the powerup's 2x2 area (4 grid spaces)
@@ -793,6 +800,30 @@ function handleMessage(ws, playerId, rawMessage) {
               };
             }
           }
+          
+          // If player has speed powerup, also check the position one step back
+          // (the intermediate position where head was before second movement)
+          if (hasSpeed && player.snake.length > 0) {
+            const direction = player.direction;
+            const intermediateHead = {
+              x: (head.x - direction.x + GRID_SIZE) % GRID_SIZE,
+              y: (head.y - direction.y + GRID_SIZE) % GRID_SIZE
+            };
+            
+            for (let i = 0; i < powerups.length; i++) {
+              if (collectedPowerups.includes(i)) continue;
+              if (checkPowerupCollision(intermediateHead, powerups[i])) {
+                collectedPowerups.push(i);
+                powerUpCollected = true;
+                return {
+                  ...player,
+                  powerups: addPowerup(player, powerups[i].type),
+                  powerupsCollected: (player.powerupsCollected || 0) + 1
+                };
+              }
+            }
+          }
+          
           return player;
         });
         
@@ -1054,6 +1085,48 @@ function handleMessage(ws, playerId, rawMessage) {
         rooms.set(roomCode, room);
         
         broadcastToRoom(roomCode, { type: 'roomUpdate', room }, playerId);
+        break;
+      }
+
+      case 'resetToLobby': {
+        const room = rooms.get(roomCode);
+        if (!room) {
+          sendResponse({ success: false, error: 'Room not found' });
+          return;
+        }
+        
+        // Reset room to waiting state
+        room.status = 'waiting';
+        room.message = 'Game ended. Waiting for host to start...';
+        room.winner = null;
+        room.timer = GAME_DURATION;
+        room.game_start_time = null;
+        
+        // Reset all players to initial state
+        room.players = room.players.map((player, idx) => {
+          const startPos = getStartPosition(idx);
+          const direction = getStartDirection(idx);
+          return {
+            ...player,
+            alive: true,
+            lives: MAX_LIVES,
+            snake: createInitialSnake(startPos, direction),
+            direction: direction,
+            score: 0,
+            powerups: [],
+            foodEaten: 0,
+            powerupsCollected: 0
+          };
+        });
+        
+        // Clear food and powerups
+        room.food = [];
+        room.powerups = [];
+        
+        rooms.set(roomCode, room);
+        
+        sendResponse({ success: true, room });
+        broadcastToRoom(roomCode, { type: 'roomUpdate', room });
         break;
       }
 

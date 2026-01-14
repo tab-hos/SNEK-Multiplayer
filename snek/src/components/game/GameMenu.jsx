@@ -57,7 +57,7 @@ export default function GameMenu({
               className="w-full !bg-[#93B301] hover:!bg-[#627703] text-white"
             >
               <RotateCcw className="w-4 h-4 mr-2" />
-              Play Again
+              Back to Lobby
             </Button>
             {rematchTimer !== null && rematchTimer > 0 && (
               <p className="text-center text-sm text-gray-400 mt-2">
