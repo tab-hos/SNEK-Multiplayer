@@ -1,10 +1,16 @@
 import React from 'react';
 import { Button } from '../ui/button.jsx';
-import { Copy, Play, Users, Crown, ArrowLeft, Cpu, X } from 'lucide-react';
+import { Copy, Play, Users, Crown, ArrowLeft, Cpu, X, Check } from 'lucide-react';
 
-export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, onAddBot, onRemoveBot }) {
+export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, onAddBot, onRemoveBot, onToggleReady }) {
   const isHost = room?.host_id === playerId;
   const canStart = room?.players?.length >= 2;
+  
+  // Check if all human players are ready
+  const humanPlayers = room?.players?.filter(p => !p.isBot) || [];
+  const allReady = humanPlayers.length > 0 && humanPlayers.every(p => p.ready === true);
+  const currentPlayer = room?.players?.find(p => p.id === playerId);
+  const isReady = currentPlayer?.ready === true;
   const botCount = room?.players?.filter(p => p.isBot).length || 0;
   const maxBots = 3;
   const canAddBot = isHost && room?.status === 'waiting' && botCount < maxBots && room?.players?.length < 4;
@@ -80,6 +86,9 @@ export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, on
                 {player.isBot && (
                   <Cpu className="w-4 h-4 text-purple-400" />
                 )}
+                {!player.isBot && player.ready && (
+                  <Check className="w-4 h-4 text-green-400" />
+                )}
               </div>
             ))}
             
@@ -96,26 +105,41 @@ export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, on
           </div>
         </div>
         
-        {/* Start Button */}
+        {/* Start Button / Ready Button */}
         {isHost ? (
-          <Button
-            onClick={onStart}
-            disabled={!canStart}
-            className="w-full py-6"
-          >
-            <Play className="w-5 h-5 mr-2" />
-            Start Game
-          </Button>
+          <>
+            <Button
+              onClick={onStart}
+              disabled={!canStart || !allReady}
+              className="w-full py-6"
+            >
+              <Play className="w-5 h-5 mr-2" />
+              {allReady ? 'Start Game' : 'Waiting for players...'}
+            </Button>
+            {!canStart && (
+              <p className="text-amber-400 text-sm text-center mt-3">
+                Need at least 2 players to start
+              </p>
+            )}
+            {canStart && !allReady && (
+              <p className="text-amber-400 text-sm text-center mt-3">
+                Waiting for all players to be ready...
+              </p>
+            )}
+          </>
         ) : (
-          <div className="text-center text-gray-400 py-4">
-            Waiting for host to start...
-          </div>
-        )}
-        
-        {!canStart && isHost && (
-          <p className="text-amber-400 text-sm text-center mt-3">
-            Need at least 2 players to start
-          </p>
+          <>
+            <Button
+              onClick={onToggleReady}
+              className={`w-full py-6 ${isReady ? 'bg-green-600 hover:bg-green-700' : 'bg-[#93B301] hover:bg-[#627703]'}`}
+            >
+              <Check className="w-5 h-5 mr-2" />
+              {isReady ? 'Ready!' : 'Ready'}
+            </Button>
+            <p className="text-gray-400 text-sm text-center mt-3">
+              Click Ready when you're prepared to start
+            </p>
+          </>
         )}
         
         {/* Bot Controls (Host only) */}

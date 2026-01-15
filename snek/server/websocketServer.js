@@ -243,7 +243,8 @@ function createHumanPlayer(playerIndex, playerId, playerName) {
     score: 0,
     alive: true,
     lives: MAX_LIVES,
-    isBot: false
+    isBot: false,
+    ready: false // Ready status for guest players
   };
 }
 
@@ -261,6 +262,7 @@ function createBotPlayer(playerIndex) {
     alive: true,
     lives: MAX_LIVES,
     isBot: true,
+    ready: true, // Bots are always ready
     powerups: [],
     foodEaten: 0,
     powerupsCollected: 0
@@ -337,8 +339,10 @@ function handleMessage(ws, playerId, rawMessage) {
           timer: GAME_DURATION,
           last_update: Date.now(),
           message: '',
-          chat: [],
+          chat: [], // Lobby chat
+          gameChat: [], // Separate chat for during gameplay
           typing: {}, // Track who is typing: { playerId: timestamp }
+          paused_by: null, // Track who paused the game
           clients: new Map([[playerId, ws]])
         };
         rooms.set(code, room);
@@ -493,6 +497,14 @@ function handleMessage(ws, playerId, rawMessage) {
           return;
         }
         
+        // Check if all human players are ready (bots are always ready)
+        const humanPlayers = room.players.filter(p => !p.isBot);
+        const allReady = humanPlayers.length > 0 && humanPlayers.every(p => p.ready === true);
+        if (!allReady) {
+          sendResponse({ success: false, error: 'All players must be ready to start' });
+          return;
+        }
+        
         // Ensure all players have lives initialized before starting
         // Reinitialize human players and bots properly
         room.players = room.players.map((player, playerIndex) => {
@@ -542,7 +554,9 @@ function handleMessage(ws, playerId, rawMessage) {
         }
         if (!room.powerups) room.powerups = [];
         if (!room.chat) room.chat = [];
+        if (!room.gameChat) room.gameChat = []; // Initialize game chat
         if (!room.typing) room.typing = {};
+        room.paused_by = null; // Clear any previous pause state
         
         room.status = 'playing';
         room.last_update = Date.now();
@@ -700,6 +714,7 @@ function handleMessage(ws, playerId, rawMessage) {
           
           // Check food collision after first movement
           let playerFoodEaten = false;
+          let firstMovementFoodEaten = false;
           for (let i = 0; i < food.length; i++) {
             if (eatenFoodIndices.includes(i)) continue;
             
@@ -710,6 +725,7 @@ function handleMessage(ws, playerId, rawMessage) {
               eatenFoodIndices.push(i);
               foodEaten = true;
               playerFoodEaten = true;
+              firstMovementFoodEaten = true;
               const tail = currentSnake[currentSnake.length - 1];
               currentSnake = [...currentSnake, tail];
               break; // Only eat one food per tick
@@ -717,13 +733,24 @@ function handleMessage(ws, playerId, rawMessage) {
           }
           
           // SECOND movement for speed powerup (only for this player)
+          // IMPORTANT: Keep the intermediate position (newHead1) in the snake so it's visible
+          // This ensures smooth visual movement through both squares without skipping
           if (hasSpeed) {
-            const newHead2 = currentSnake[0];
+            const intermediateHead = currentSnake[0]; // This is newHead1 from first movement
             const secondHead = {
-              x: (newHead2.x + direction.x + GRID_SIZE) % GRID_SIZE,
-              y: (newHead2.y + direction.y + GRID_SIZE) % GRID_SIZE
+              x: (intermediateHead.x + direction.x + GRID_SIZE) % GRID_SIZE,
+              y: (intermediateHead.y + direction.y + GRID_SIZE) % GRID_SIZE
             };
-            currentSnake = [secondHead, ...currentSnake.slice(0, -1)];
+            
+            // Keep intermediateHead as second segment, add secondHead as new head
+            // This makes both positions visible: [secondHead, intermediateHead, ...rest]
+            if (firstMovementFoodEaten) {
+              // Snake already grew from first movement, so keep all segments
+              currentSnake = [secondHead, intermediateHead, ...currentSnake.slice(1)];
+            } else {
+              // Normal case: remove tail, keep intermediate position visible
+              currentSnake = [secondHead, intermediateHead, ...currentSnake.slice(1, -1)];
+            }
             
             // Check food collision after second movement
             for (let i = 0; i < food.length; i++) {
@@ -998,8 +1025,9 @@ function handleMessage(ws, playerId, rawMessage) {
         // Track last broadcast time per room to throttle updates
         if (!room.lastBroadcast) room.lastBroadcast = 0;
         const timeSinceLastBroadcast = now - room.lastBroadcast;
-        // Broadcast at least every 16ms (~60 FPS) for smooth gameplay, or immediately on important events
-        const shouldBroadcast = timeSinceLastBroadcast >= 16 || // ~60 FPS for smooth gameplay
+        // Broadcast at least every 20ms (~50 FPS) for smooth gameplay on Render.com
+        // Slightly reduced frequency to reduce network load while maintaining smoothness
+        const shouldBroadcast = timeSinceLastBroadcast >= 20 || // ~50 FPS for Render.com (reduced from 16ms)
                                 foodEaten || 
                                 powerUpCollected || 
                                 result.eliminated.length > 0 ||
@@ -1054,6 +1082,7 @@ function handleMessage(ws, playerId, rawMessage) {
         const player = room.players.find(p => p.id === playerId);
         
         room.status = 'paused';
+        room.paused_by = playerId; // Track who paused
         room.message = `${player?.name || 'A player'} paused the game`;
         room.last_update = Date.now(); // Update timestamp to track pause time
         rooms.set(roomCode, room);
@@ -1073,9 +1102,15 @@ function handleMessage(ws, playerId, rawMessage) {
           sendResponse({ success: false, error: 'Game is not paused' });
           return;
         }
+        // Only the person who paused can resume
+        if (room.paused_by !== playerId) {
+          sendResponse({ success: false, error: 'Only the player who paused can resume the game' });
+          return;
+        }
         const player = room.players.find(p => p.id === playerId);
         
         room.status = 'playing';
+        room.paused_by = null; // Clear paused_by
         room.last_update = Date.now(); // Reset timestamp for timer calculation
         room.message = `${player?.name || 'A player'} resumed the game`;
         rooms.set(roomCode, room);
@@ -1116,6 +1151,8 @@ function handleMessage(ws, playerId, rawMessage) {
         room.winner = null;
         room.timer = GAME_DURATION;
         room.game_start_time = null;
+        room.gameChat = []; // Clear game chat when returning to lobby
+        room.paused_by = null; // Clear pause state
         
         // Reset all players to initial state
         room.players = room.players.map((player, idx) => {
@@ -1130,7 +1167,8 @@ function handleMessage(ws, playerId, rawMessage) {
             score: 0,
             powerups: [],
             foodEaten: 0,
-            powerupsCollected: 0
+            powerupsCollected: 0,
+            ready: player.isBot ? true : false // Reset ready status (bots stay ready)
           };
         });
         
@@ -1142,6 +1180,66 @@ function handleMessage(ws, playerId, rawMessage) {
         
         sendResponse({ success: true, room });
         broadcastToRoom(roomCode, { type: 'roomUpdate', room });
+        break;
+      }
+
+      case 'toggleReady': {
+        const room = rooms.get(roomCode);
+        if (!room) {
+          sendResponse({ success: false, error: 'Room not found' });
+          return;
+        }
+        if (room.status !== 'waiting') {
+          sendResponse({ success: false, error: 'Can only toggle ready in lobby' });
+          return;
+        }
+        const player = room.players.find(p => p.id === playerId);
+        if (!player) {
+          sendResponse({ success: false, error: 'Player not found' });
+          return;
+        }
+        // Host doesn't need to be ready (they start the game)
+        if (room.host_id === playerId) {
+          sendResponse({ success: false, error: 'Host does not need to be ready' });
+          return;
+        }
+        
+        // Toggle ready status
+        player.ready = !player.ready;
+        rooms.set(roomCode, room);
+        
+        sendResponse({ success: true, room });
+        broadcastToRoom(roomCode, { type: 'roomUpdate', room }, null);
+        break;
+      }
+
+      case 'toggleReady': {
+        const room = rooms.get(roomCode);
+        if (!room) {
+          sendResponse({ success: false, error: 'Room not found' });
+          return;
+        }
+        if (room.status !== 'waiting') {
+          sendResponse({ success: false, error: 'Can only toggle ready in lobby' });
+          return;
+        }
+        const player = room.players.find(p => p.id === playerId);
+        if (!player) {
+          sendResponse({ success: false, error: 'Player not found' });
+          return;
+        }
+        // Host doesn't need to be ready (they start the game)
+        if (room.host_id === playerId) {
+          sendResponse({ success: false, error: 'Host does not need to be ready' });
+          return;
+        }
+        
+        // Toggle ready status
+        player.ready = !player.ready;
+        rooms.set(roomCode, room);
+        
+        sendResponse({ success: true, room });
+        broadcastToRoom(roomCode, { type: 'roomUpdate', room }, null);
         break;
       }
 
@@ -1173,8 +1271,12 @@ function handleMessage(ws, playerId, rawMessage) {
           return;
         }
         
-        // Limit chat history to last 50 messages
-        if (!room.chat) room.chat = [];
+        // Separate chat for lobby vs gameplay
+        // During gameplay, use gameChat; in lobby, use chat
+        const chatArray = room.status === 'playing' 
+          ? (room.gameChat = room.gameChat || [])
+          : (room.chat = room.chat || []);
+        
         const chatMessage = {
           id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           playerId: playerId,
@@ -1184,9 +1286,9 @@ function handleMessage(ws, playerId, rawMessage) {
           timestamp: Date.now()
         };
         
-        room.chat.push(chatMessage);
-        if (room.chat.length > 50) {
-          room.chat = room.chat.slice(-50); // Keep only last 50 messages
+        chatArray.push(chatMessage);
+        if (chatArray.length > 50) {
+          chatArray.splice(0, chatArray.length - 50); // Keep only last 50 messages
         }
         
         rooms.set(roomCode, room);

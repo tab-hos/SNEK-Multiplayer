@@ -337,15 +337,49 @@ export default function Game() {
     
     const handleChatMessage = (updatedRoom) => {
       // Update room state with latest chat messages
-      if (updatedRoom) {
-        setRoomWithInterpolation(updatedRoom);
+      // IMPORTANT: Only update chat, don't change room status or other state
+      // This prevents redirects when chatting in lobby
+      if (updatedRoom && room) {
+        // Preserve current status and only update chat-related fields
+        const updatedRoomWithPreservedStatus = {
+          ...room, // Keep current room state
+          chat: updatedRoom.chat || room.chat, // Update chat
+          gameChat: updatedRoom.gameChat || room.gameChat, // Update gameChat
+          typing: updatedRoom.typing || room.typing // Update typing status
+        };
+        // Only update if we're in the same status, prevent status changes from chat
+        if (updatedRoomWithPreservedStatus.status === room.status) {
+          setRoom(updatedRoomWithPreservedStatus);
+          // Also update displayRoom for chat rendering
+          if (displayRoom) {
+            setDisplayRoom({
+              ...displayRoom,
+              chat: updatedRoomWithPreservedStatus.chat,
+              gameChat: updatedRoomWithPreservedStatus.gameChat,
+              typing: updatedRoomWithPreservedStatus.typing
+            });
+          }
+        }
       }
     };
     
     const handleTypingUpdate = (updatedRoom) => {
-      // Update room state with typing status
-      if (updatedRoom) {
-        setRoomWithInterpolation(updatedRoom);
+      // Update room state with typing status only
+      // Don't change room status or other state to prevent redirects
+      if (updatedRoom && room) {
+        const updatedRoomWithPreservedStatus = {
+          ...room,
+          typing: updatedRoom.typing || room.typing
+        };
+        if (updatedRoomWithPreservedStatus.status === room.status) {
+          setRoom(updatedRoomWithPreservedStatus);
+          if (displayRoom) {
+            setDisplayRoom({
+              ...displayRoom,
+              typing: updatedRoomWithPreservedStatus.typing
+            });
+          }
+        }
       }
     };
     
@@ -708,6 +742,21 @@ export default function Game() {
     }
   }, [room, callServer]);
 
+  // Toggle ready status
+  const handleToggleReady = useCallback(async () => {
+    if (!room) return;
+    try {
+      const result = await callServer('toggleReady', { roomCode: room.room_code });
+      if (result.success) {
+        setRoom(result.room);
+      } else {
+        setError(result.error || result.error || 'Failed to toggle ready');
+      }
+    } catch (err) {
+      setError('Failed to toggle ready');
+    }
+  }, [room, callServer]);
+
   const toggleSound = () => {
     const enabled = soundManager.toggle();
     setSoundEnabled(enabled);
@@ -851,6 +900,7 @@ export default function Game() {
                   onLeave={handleQuit}
                   onAddBot={handleAddBot}
                   onRemoveBot={handleRemoveBot}
+                  onToggleReady={handleToggleReady}
                 />
               </div>
               <div className="lg:col-span-1">
@@ -946,6 +996,8 @@ export default function Game() {
                       onPlayAgain={handlePlayAgain}
                       winner={room.winner}
                       message={room.message}
+                      room={room}
+                      playerId={playerId}
                     />
                   </div>
                   <div className="min-h-0 border-t border-gray-700 pt-4 overflow-hidden">
@@ -998,6 +1050,8 @@ export default function Game() {
             onPlayAgain={handlePlayAgain}
             winner={room.winner}
             message={room.message}
+            room={room}
+            playerId={playerId}
           />
         </div>
         <div className="min-h-0 overflow-hidden border-t border-gray-700 pt-4">

@@ -126,16 +126,23 @@ export default function Chat({ room, playerId, onSendMessage, disabled = false }
   };
 
   return (
-    <div className="bg-[#323645] rounded-xl p-4 flex flex-col h-full min-h-0 overflow-hidden">
+    <div className="bg-[#323645] rounded-xl p-4 flex flex-col h-full min-h-0 overflow-hidden" style={{ maxWidth: '100%', width: '100%' }}>
       {/* Chat Header */}
       <div className="flex-shrink-0 pb-2">
         <h3 className="text-sm font-semibold text-white">Chat</h3>
       </div>
       
-      {/* Messages - flexible height with scroll */}
+      {/* Messages - fixed height with scroll, prevents widening */}
       <div 
         ref={messagesContainerRef}
         className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0"
+        style={{ 
+          minHeight: 0,
+          maxHeight: '100%',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          width: '100%'
+        }}
       >
         {messages.length === 0 ? (
           <div className="text-center text-gray-500 text-sm py-4">
@@ -150,9 +157,15 @@ export default function Chat({ room, playerId, onSendMessage, disabled = false }
                 className={`flex flex-col ${isOwnMessage ? 'items-end' : 'items-start'}`}
               >
                 <div
-                  className={`w-[80%] max-w-[80%] rounded-lg px-3 py-2 ${
+                  className={`rounded-lg px-3 py-2 ${
                     isOwnMessage ? 'bg-[#CF5A16]' : 'bg-gray-800/50'
                   }`}
+                  style={{
+                    maxWidth: '85%',
+                    width: 'fit-content',
+                    wordWrap: 'break-word',
+                    overflowWrap: 'break-word'
+                  }}
                 >
                   {!isOwnMessage && (
                     <div className="flex items-center gap-2 mb-1">

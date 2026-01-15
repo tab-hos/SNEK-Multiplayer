@@ -9,8 +9,12 @@ export default function GameMenu({
   onQuit, 
   onPlayAgain,
   winner,
-  message
+  message,
+  room,
+  playerId
 }) {
+  // Check if current player can resume (only the one who paused)
+  const canResume = status === 'paused' && room?.paused_by === playerId;
   return (
     <div
       className="bg-[#323645] rounded-xl"
@@ -44,11 +48,12 @@ export default function GameMenu({
         {status === 'paused' && (
           <Button
             onClick={onResume}
-            className="w-full !bg-[#93B301] hover:!bg-[#627703] !text-white hover:!text-white transition-colors h-9"
-
+            disabled={!canResume}
+            className="w-full !bg-[#93B301] hover:!bg-[#627703] !text-white hover:!text-white transition-colors h-9 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={!canResume ? 'Only the player who paused can resume' : 'Resume Game'}
           >
             <Play className="w-4 h-4 mr-2" />
-            Resume Game
+            {canResume ? 'Resume Game' : 'Waiting for pauser to resume...'}
           </Button>
         )}
         
