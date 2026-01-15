@@ -994,7 +994,21 @@ function handleMessage(ws, playerId, rawMessage) {
         sendResponse(result);
         
         // Broadcast game update to all players (including the requester for consistency)
-        broadcastToRoom(roomCode, { type: 'gameUpdate', ...result });
+        // Throttle broadcasts to reduce network load while maintaining smooth gameplay
+        // Track last broadcast time per room to throttle updates
+        if (!room.lastBroadcast) room.lastBroadcast = 0;
+        const timeSinceLastBroadcast = now - room.lastBroadcast;
+        // Broadcast at least every 33ms (~30 FPS) for smooth gameplay, or immediately on important events
+        const shouldBroadcast = timeSinceLastBroadcast >= 33 || // ~30 FPS max for network efficiency
+                                foodEaten || 
+                                powerUpCollected || 
+                                result.eliminated.length > 0 ||
+                                status !== 'playing';
+        
+        if (shouldBroadcast) {
+          room.lastBroadcast = now;
+          broadcastToRoom(roomCode, { type: 'gameUpdate', ...result });
+        }
         break;
       }
 

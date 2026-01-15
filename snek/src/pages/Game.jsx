@@ -39,6 +39,8 @@ export default function Game() {
   const isStartingGameRef = useRef(false);
   const isInWaitingLobbyRef = useRef(false);
   const displayRoomRef = useRef(null);
+  const pendingRoomUpdateRef = useRef(null);
+  const lastUpdateTimeRef = useRef(0);
 
   useEffect(() => {
     displayRoomRef.current = displayRoom;
@@ -228,9 +230,16 @@ export default function Game() {
       // Always update authoritative room immediately
       setRoom(nextRoom);
       
-      // Simply update displayRoom to match room - no complex interpolation for now
-      // This ensures madot always render with latest state
-      setDisplayRoom(nextRoom);
+      // Throttle displayRoom updates to reduce re-renders (max 60 FPS)
+      const now = performance.now();
+      if (now - lastUpdateTimeRef.current >= 16) { // ~60 FPS max
+        setDisplayRoom(nextRoom);
+        lastUpdateTimeRef.current = now;
+        pendingRoomUpdateRef.current = null;
+      } else {
+        // Queue the update for next frame
+        pendingRoomUpdateRef.current = nextRoom;
+      }
     };
     
     const handleRoomUpdate = (updatedRoom) => {
@@ -421,6 +430,7 @@ export default function Game() {
   }, [room, callServer]);
 
   // FPS counter - separate render loop for smooth 60 FPS
+  // Also handles pending room updates for smooth rendering
   useEffect(() => {
     if (room?.status === 'playing') {
       let frameCount = 0;
@@ -428,6 +438,13 @@ export default function Game() {
       
       const renderLoop = (currentTime) => {
         frameCount++;
+        
+        // Apply pending room updates during render loop for smooth updates
+        if (pendingRoomUpdateRef.current) {
+          setDisplayRoom(pendingRoomUpdateRef.current);
+          lastUpdateTimeRef.current = currentTime;
+          pendingRoomUpdateRef.current = null;
+        }
         
         // Update FPS every second
         if (currentTime - lastFpsUpdate >= 1000) {
