@@ -497,11 +497,38 @@ function handleMessage(ws, playerId, rawMessage) {
           return;
         }
         
-        // Check if all human players are ready (bots are always ready)
-        const humanPlayers = room.players.filter(p => !p.isBot);
-        const allReady = humanPlayers.length > 0 && humanPlayers.every(p => p.ready === true);
+        // Check if all guest players (non-host human players) are ready
+        // Host doesn't need to be ready, bots are always ready
+        const guestPlayers = room.players.filter(p => !p.isBot && p.id !== room.host_id);
+        // Ensure all guest players have ready property initialized (default to false if undefined)
+        guestPlayers.forEach(p => {
+          if (p.ready === undefined) {
+            p.ready = false;
+          }
+        });
+        // If there are no guest players (only host + bots), game can start
+        // Otherwise, all guest players must be ready
+        const allReady = guestPlayers.length === 0 || guestPlayers.every(p => p.ready === true);
+        
+        if (process.env.DEBUG === 'true') {
+          console.log('[Server] Start game ready check:', {
+            totalPlayers: room.players.length,
+            guestPlayers: guestPlayers.length,
+            guestPlayersDetails: guestPlayers.map(p => ({ name: p.name, ready: p.ready, id: p.id })),
+            allReady,
+            bots: room.players.filter(p => p.isBot).length,
+            hostId: room.host_id
+          });
+        }
+        
         if (!allReady) {
-          sendResponse({ success: false, error: 'All players must be ready to start' });
+          const notReadyPlayers = guestPlayers.filter(p => !p.ready).map(p => p.name);
+          sendResponse({ 
+            success: false, 
+            error: notReadyPlayers.length > 0 
+              ? `Waiting for players to be ready: ${notReadyPlayers.join(', ')}` 
+              : 'All players must be ready to start'
+          });
           return;
         }
         
@@ -525,6 +552,7 @@ function handleMessage(ws, playerId, rawMessage) {
               snake: player.snake && player.snake.length > 0 ? player.snake : createInitialSnake(startPos, direction),
               direction: direction,
               isBot: true,
+              ready: true, // Bots are always ready
               powerups: player.powerups || [],
               foodEaten: player.foodEaten || 0,
               powerupsCollected: player.powerupsCollected || 0
@@ -538,6 +566,7 @@ function handleMessage(ws, playerId, rawMessage) {
               snake: player.snake && player.snake.length > 0 ? player.snake : createInitialSnake(startPos, direction),
               direction: direction,
               isBot: false,
+              ready: player.ready !== undefined ? player.ready : false, // Preserve ready status
               powerups: player.powerups || [],
               foodEaten: player.foodEaten || 0,
               powerupsCollected: player.powerupsCollected || 0
@@ -1204,34 +1233,9 @@ function handleMessage(ws, playerId, rawMessage) {
           return;
         }
         
-        // Toggle ready status
-        player.ready = !player.ready;
-        rooms.set(roomCode, room);
-        
-        sendResponse({ success: true, room });
-        broadcastToRoom(roomCode, { type: 'roomUpdate', room }, null);
-        break;
-      }
-
-      case 'toggleReady': {
-        const room = rooms.get(roomCode);
-        if (!room) {
-          sendResponse({ success: false, error: 'Room not found' });
-          return;
-        }
-        if (room.status !== 'waiting') {
-          sendResponse({ success: false, error: 'Can only toggle ready in lobby' });
-          return;
-        }
-        const player = room.players.find(p => p.id === playerId);
-        if (!player) {
-          sendResponse({ success: false, error: 'Player not found' });
-          return;
-        }
-        // Host doesn't need to be ready (they start the game)
-        if (room.host_id === playerId) {
-          sendResponse({ success: false, error: 'Host does not need to be ready' });
-          return;
+        // Initialize ready if undefined
+        if (player.ready === undefined) {
+          player.ready = false;
         }
         
         // Toggle ready status

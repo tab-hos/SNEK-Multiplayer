@@ -105,7 +105,12 @@ export default function Game() {
 
   // Start game
   const handleStartGame = useCallback(async () => {
-    if (!room || isStartingGameRef.current) return; // Prevent multiple clicks
+    if (!room || isStartingGameRef.current) {
+      console.log('[StartGame] Blocked:', { room: !!room, isStarting: isStartingGameRef.current });
+      return; // Prevent multiple clicks
+    }
+    
+    console.log('[StartGame] Starting game...', { roomCode: room.room_code, players: room.players?.length });
     
     // Clear waiting lobby flag since we're starting a new game
     // This allows WebSocket updates to work normally again
@@ -118,12 +123,17 @@ export default function Game() {
     }
     
     isStartingGameRef.current = true;
+    setError(''); // Clear any previous errors
     
     try {
       // Start the game immediately on server (sets status to 'playing')
       const result = await callServer('startGame', { roomCode: room.room_code });
+      console.log('[StartGame] Server response:', result);
       
       if (result.success && result.room) {
+        // Clear any errors since game started successfully
+        setError('');
+        
         // Set room to playing status immediately so game board shows
         const updatedRoom = { ...result.room, status: 'playing' };
         setRoom(updatedRoom);
@@ -148,13 +158,30 @@ export default function Game() {
           }
         }, 1000);
       } else {
-        console.error('Failed to start game:', result.error);
-        isStartingGameRef.current = false;
+        // Only show error if game didn't start via WebSocket
+        // The WebSocket broadcast will handle the actual game start
+        console.warn('Start game HTTP call failed, but WebSocket may still start the game:', result.error);
+        // Don't set error immediately - wait a bit to see if WebSocket handles it
+        setTimeout(() => {
+          // Only show error if room status is still 'waiting' (game didn't start)
+          if (room?.status === 'waiting') {
+            setError(result.error || 'Failed to start game');
+            isStartingGameRef.current = false;
+          }
+        }, 500);
       }
     } catch (err) {
-      console.error('Failed to start game:', err);
-      isStartingGameRef.current = false;
-      setCountdown(null);
+      // Only show error if game didn't start via WebSocket
+      console.warn('Start game HTTP call error, but WebSocket may still start the game:', err);
+      // Don't set error immediately - wait a bit to see if WebSocket handles it
+      setTimeout(() => {
+        // Only show error if room status is still 'waiting' (game didn't start)
+        if (room?.status === 'waiting') {
+          setError(err.message || 'Failed to start game');
+          isStartingGameRef.current = false;
+          setCountdown(null);
+        }
+      }, 500);
     }
   }, [room, callServer]);
 
@@ -303,6 +330,10 @@ export default function Game() {
     
     const handleGameStart = (updatedRoom) => {
       if (updatedRoom) {
+        // Clear any errors since game is starting successfully via WebSocket
+        setError('');
+        isStartingGameRef.current = false;
+        
         // Clear waiting lobby flag if game is starting
         isInWaitingLobbyRef.current = false;
         

@@ -6,9 +6,25 @@ export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, on
   const isHost = room?.host_id === playerId;
   const canStart = room?.players?.length >= 2;
   
-  // Check if all human players are ready
-  const humanPlayers = room?.players?.filter(p => !p.isBot) || [];
-  const allReady = humanPlayers.length > 0 && humanPlayers.every(p => p.ready === true);
+  // Check if all human players (excluding host) are ready
+  // Host doesn't need to be ready since they start the game
+  // Bots are always ready, so they don't need to be checked
+  const guestPlayers = room?.players?.filter(p => !p.isBot && p.id !== room?.host_id) || [];
+  // If there are no guest players (only host + bots), allReady is true
+  // Otherwise, check if all guest players have ready === true (handle undefined as false)
+  const allReady = guestPlayers.length === 0 || guestPlayers.every(p => p.ready === true);
+  
+  // Debug logging
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[Lobby] Ready check:', {
+      totalPlayers: room?.players?.length,
+      guestPlayers: guestPlayers.length,
+      guestPlayersDetails: guestPlayers.map(p => ({ name: p.name, ready: p.ready })),
+      allReady,
+      canStart,
+      bots: room?.players?.filter(p => p.isBot).length
+    });
+  }
   const currentPlayer = room?.players?.find(p => p.id === playerId);
   const isReady = currentPlayer?.ready === true;
   const botCount = room?.players?.filter(p => p.isBot).length || 0;
@@ -84,7 +100,10 @@ export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, on
                   <Crown className="w-4 h-4 text-yellow-400" />
                 )}
                 {player.isBot && (
-                  <Cpu className="w-4 h-4 text-purple-400" />
+                  <>
+                    <Cpu className="w-4 h-4 text-purple-400" />
+                    <Check className="w-4 h-4 text-green-400" title="Bot (Always Ready)" />
+                  </>
                 )}
                 {!player.isBot && player.ready && (
                   <Check className="w-4 h-4 text-green-400" />
@@ -109,12 +128,37 @@ export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, on
         {isHost ? (
           <>
             <Button
-              onClick={onStart}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                // Double-check conditions before calling onStart
+                if (!canStart || !allReady) {
+                  console.warn('[Lobby] Start button clicked but conditions not met', { 
+                    canStart, 
+                    allReady, 
+                    guestPlayers: guestPlayers.length,
+                    guestPlayersReady: guestPlayers.filter(p => p.ready).length,
+                    players: room?.players?.map(p => ({ name: p.name, isBot: p.isBot, ready: p.ready }))
+                  });
+                  return;
+                }
+                console.log('[Lobby] Start button clicked - starting game', { 
+                  canStart, 
+                  allReady, 
+                  guestPlayers: guestPlayers.length
+                });
+                if (onStart) {
+                  onStart();
+                } else {
+                  console.error('[Lobby] onStart handler is not provided!');
+                }
+              }}
               disabled={!canStart || !allReady}
-              className="w-full py-6"
+              className={`w-full py-6 ${(!canStart || !allReady) ? 'opacity-50 cursor-not-allowed' : ''}`}
+              type="button"
             >
               <Play className="w-5 h-5 mr-2" />
-              {allReady ? 'Start Game' : 'Waiting for players...'}
+              {allReady && canStart ? 'Start Game' : 'Waiting for players...'}
             </Button>
             {!canStart && (
               <p className="text-amber-400 text-sm text-center mt-3">
@@ -123,7 +167,7 @@ export default function Lobby({ room, playerId, onStart, onCopyCode, onLeave, on
             )}
             {canStart && !allReady && (
               <p className="text-amber-400 text-sm text-center mt-3">
-                Waiting for all players to be ready...
+                Waiting for all players to be ready... ({guestPlayers.filter(p => !p.ready).length} not ready)
               </p>
             )}
           </>
