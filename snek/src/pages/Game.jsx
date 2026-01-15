@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { gameClient } from '../api/gameClient.js';
+import { wsClient } from '../api/websocketClient.js';
 import { Volume2, VolumeX, Maximize2, Minimize2 } from 'lucide-react';
 import { Button } from '../components/ui/button.jsx';
 import GameBoard from '../components/game/GameBoard.jsx';
@@ -11,9 +12,10 @@ import Chat from '../components/game/Chat.jsx';
 import { soundManager } from '../components/game/SoundManager.js';
 
 // Adaptive tick rate based on environment
-// Production (e.g., Render) may have higher latency, so we adjust accordingly
+// Render.com has higher latency, so we use a slightly slower tick rate for stability
+// This ensures smooth gameplay even with 100-200ms latency
 const isProduction = import.meta.env.PROD;
-const TICK_RATE = isProduction ? 180 : 150; // Faster base speed for more dynamic gameplay
+const TICK_RATE = isProduction ? 200 : 150; // Slower for Render.com to handle latency better
 
 export default function Game() {
   const [room, setRoom] = useState(null);
@@ -177,22 +179,37 @@ export default function Game() {
 
     // Send queued direction first (non-blocking)
     if (directionQueueRef.current) {
-      callServer('updateDirection', {
-        roomCode: room.room_code,
-        direction: directionQueueRef.current
-      }).catch(() => {
-        // Ignore errors - direction will be sent in next tick
-      });
+      // Use WebSocket directly for direction updates to avoid HTTP overhead
+      try {
+        wsClient.send('updateDirection', {
+          roomCode: room.room_code,
+          direction: directionQueueRef.current
+        });
+      } catch (e) {
+        // Fallback to callServer if WebSocket fails
+        callServer('updateDirection', {
+          roomCode: room.room_code,
+          direction: directionQueueRef.current
+        }).catch(() => {
+          // Ignore errors - direction will be sent in next tick
+        });
+      }
       directionQueueRef.current = null;
     }
 
     // Send tick request (non-blocking - WebSocket broadcasts are primary update mechanism)
     // This ensures server processes the game state, but we don't update state from tick responses
     // WebSocket broadcasts handle all state updates to avoid race conditions
-    callServer('tick', { roomCode: room.room_code }).catch(() => {
-      // Silently handle tick failures - game updates come via WebSocket broadcasts anyway
-      // This is expected behavior, especially on slower networks like Render
-    });
+    // Use WebSocket directly to avoid HTTP overhead
+    try {
+      wsClient.send('tick', { roomCode: room.room_code });
+    } catch (e) {
+      // Fallback to callServer if WebSocket fails
+      callServer('tick', { roomCode: room.room_code }).catch(() => {
+        // Silently handle tick failures - game updates come via WebSocket broadcasts anyway
+        // This is expected behavior, especially on slower networks like Render
+      });
+    }
   }, [room, callServer, countdown, playerId, getEffectiveTickRate]);
 
   // Poll for updates (lobby & paused) - also listen to WebSocket updates
@@ -230,14 +247,15 @@ export default function Game() {
       // Always update authoritative room immediately
       setRoom(nextRoom);
       
-      // Throttle displayRoom updates to reduce re-renders (max 60 FPS)
+      // Throttle displayRoom updates to maintain 60 FPS for smooth rendering
+      // For Render.com, we ensure updates are applied smoothly even with network latency
       const now = performance.now();
-      if (now - lastUpdateTimeRef.current >= 16) { // ~60 FPS max
+      if (now - lastUpdateTimeRef.current >= 16) { // ~60 FPS for smooth gameplay
         setDisplayRoom(nextRoom);
         lastUpdateTimeRef.current = now;
         pendingRoomUpdateRef.current = null;
       } else {
-        // Queue the update for next frame
+        // Queue the update for next frame - ensures smooth rendering on Render.com
         pendingRoomUpdateRef.current = nextRoom;
       }
     };
@@ -436,13 +454,17 @@ export default function Game() {
       let frameCount = 0;
       let lastFpsUpdate = performance.now();
       
+      let lastPendingUpdateCheck = 0;
+      
       const renderLoop = (currentTime) => {
         frameCount++;
         
-        // Apply pending room updates during render loop for smooth updates
-        if (pendingRoomUpdateRef.current) {
+        // Apply pending room updates during render loop (throttled to 60 FPS)
+        // Check every frame but only apply if enough time has passed
+        if (pendingRoomUpdateRef.current && (currentTime - lastPendingUpdateCheck >= 16)) {
           setDisplayRoom(pendingRoomUpdateRef.current);
           lastUpdateTimeRef.current = currentTime;
+          lastPendingUpdateCheck = currentTime;
           pendingRoomUpdateRef.current = null;
         }
         
@@ -510,11 +532,12 @@ export default function Game() {
       if (now - lastTickTime >= effectiveTickRate) {
         // Don't await - let it run in background
         // WebSocket broadcasts are the primary update mechanism
-        gameTick();
+        // Use setTimeout(0) to ensure tick doesn't block rendering
+        setTimeout(() => gameTick(), 0);
         lastTickTime = now;
       }
       
-      // Continue the loop
+      // Continue the loop - always use requestAnimationFrame for smooth 60 FPS
       if (isRunning) {
         gameLoopRef.current = requestAnimationFrame(loop);
       }

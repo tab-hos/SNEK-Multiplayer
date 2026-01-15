@@ -994,12 +994,12 @@ function handleMessage(ws, playerId, rawMessage) {
         sendResponse(result);
         
         // Broadcast game update to all players (including the requester for consistency)
-        // Throttle broadcasts to reduce network load while maintaining smooth gameplay
+        // Throttle broadcasts to maintain 60 FPS while reducing network load
         // Track last broadcast time per room to throttle updates
         if (!room.lastBroadcast) room.lastBroadcast = 0;
         const timeSinceLastBroadcast = now - room.lastBroadcast;
-        // Broadcast at least every 33ms (~30 FPS) for smooth gameplay, or immediately on important events
-        const shouldBroadcast = timeSinceLastBroadcast >= 33 || // ~30 FPS max for network efficiency
+        // Broadcast at least every 16ms (~60 FPS) for smooth gameplay, or immediately on important events
+        const shouldBroadcast = timeSinceLastBroadcast >= 16 || // ~60 FPS for smooth gameplay
                                 foodEaten || 
                                 powerUpCollected || 
                                 result.eliminated.length > 0 ||
@@ -1007,7 +1007,36 @@ function handleMessage(ws, playerId, rawMessage) {
         
         if (shouldBroadcast) {
           room.lastBroadcast = now;
-          broadcastToRoom(roomCode, { type: 'gameUpdate', ...result });
+          // Only send essential data to reduce payload size
+          // Minimize data sent - only include what's needed for rendering
+          const broadcastData = {
+            type: 'gameUpdate',
+            room: {
+              room_code: room.room_code,
+              // Only send essential player data - snake positions, colors, alive status
+              players: room.players.map(p => ({
+                id: p.id,
+                name: p.name,
+                color: p.color,
+                alive: p.alive,
+                snake: p.snake, // Snake positions are essential
+                score: p.score,
+                lives: p.lives,
+                powerups: p.powerups || [] // Active powerups
+              })),
+              food: room.food,
+              powerups: room.powerups,
+              timer: room.timer,
+              status: room.status,
+              winner: room.winner,
+              message: room.message,
+              grid_size: room.grid_size
+            },
+            foodEaten,
+            powerUpCollected,
+            eliminated: result.eliminated
+          };
+          broadcastToRoom(roomCode, broadcastData);
         }
         break;
       }
@@ -1256,16 +1285,29 @@ wss.on('connection', (ws, req) => {
     console.log(`[WebSocket] Client connected: ${serverPlayerId}`);
   }
   
+  // Handle ping/pong keepalive for Render.com
   ws.on('message', (message) => {
+    const msgStr = message.toString();
+    
+    // Handle ping/pong keepalive
+    if (msgStr === 'ping') {
+      try {
+        ws.send('pong');
+      } catch (error) {
+        console.error('[WebSocket] Error sending pong:', error);
+      }
+      return;
+    }
+    
     // Use the playerId from the message (client's playerId)
     // This ensures consistency between client and server
     try {
-      const parsed = JSON.parse(message.toString());
+      const parsed = JSON.parse(msgStr);
       const clientPlayerId = parsed.playerId || serverPlayerId;
-      handleMessage(ws, clientPlayerId, message.toString());
+      handleMessage(ws, clientPlayerId, msgStr);
     } catch {
       // Fallback to server ID if message can't be parsed
-      handleMessage(ws, serverPlayerId, message.toString());
+      handleMessage(ws, serverPlayerId, msgStr);
     }
   });
   

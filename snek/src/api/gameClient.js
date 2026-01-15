@@ -21,10 +21,10 @@ export const gameClient = {
           return new Promise((resolve, reject) => {
             const responseId = wsClient.send(action, restParams);
             // Longer timeout for tick actions (they can take longer)
-            // In production, increase timeout to handle higher latency (e.g., Render)
+            // Render.com has higher latency, so we use longer timeouts
             const isProduction = import.meta.env.PROD;
-            const tickTimeout = isProduction ? 5000 : 2000; // 5s for production, 2s for dev
-            const timeoutDuration = action === 'tick' ? tickTimeout : 10000;
+            const tickTimeout = isProduction ? 8000 : 2000; // 8s for Render.com, 2s for dev
+            const timeoutDuration = action === 'tick' ? tickTimeout : (isProduction ? 15000 : 10000);
             const timeout = setTimeout(() => {
               wsClient.off(`response:${responseId}`, handler);
               wsClient.off('response', fallbackHandler);

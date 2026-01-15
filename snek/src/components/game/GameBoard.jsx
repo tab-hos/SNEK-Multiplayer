@@ -130,6 +130,12 @@ const GameBoard = memo(function GameBoard({ players, food, powerups, gridSize = 
   const powerupsArray = useMemo(() => {
     return Array.isArray(powerups) ? powerups : [];
   }, [powerups]);
+  
+  // Memoize players array - only re-render if players array reference changes
+  // This prevents unnecessary re-renders when room object is recreated but players haven't changed
+  const playersArray = useMemo(() => {
+    return Array.isArray(players) ? players : [];
+  }, [players]);
 
   // State to track window size for responsive scaling
   const [windowSize, setWindowSize] = useState(() => {
@@ -279,27 +285,28 @@ const GameBoard = memo(function GameBoard({ players, food, powerups, gridSize = 
         </div>
       ))}
       
-      {/* Snakes */}
-      {players?.map((player, pIdx) => 
-        player.alive && player.snake?.map((segment, sIdx) => (
-<div
-  key={`${pIdx}-${sIdx}`}
-  className="absolute"
-  style={{
-    left: `${segment.x * cellSize}%`,
-    top: `${segment.y * cellSize}%`,
-    width: `${cellSize}%`,
-    height: `${cellSize}%`,
-    padding: '2px' // was 1px
-  }}
->
+      {/* Snakes - use flat list for better React reconciliation */}
+      {playersArray.flatMap((player, pIdx) => 
+        player.alive && player.snake ? player.snake.map((segment, sIdx) => (
+          <div
+            key={`${player.id}-${sIdx}-${segment.x}-${segment.y}`}
+            className="absolute"
+            style={{
+              left: `${segment.x * cellSize}%`,
+              top: `${segment.y * cellSize}%`,
+              width: `${cellSize}%`,
+              height: `${cellSize}%`,
+              padding: '2px',
+              willChange: 'transform' // Hint to browser for optimization
+            }}
+          >
             <Cell
-  color={player.color}
-  isHead={sIdx === 0}
-  isTail={sIdx === player.snake.length - 1}
-/>
+              color={player.color}
+              isHead={sIdx === 0}
+              isTail={sIdx === player.snake.length - 1}
+            />
           </div>
-        ))
+        )) : []
       )}
     </div>
   );
